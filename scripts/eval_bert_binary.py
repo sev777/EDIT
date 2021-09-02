@@ -233,7 +233,7 @@ if __name__ == "__main__":
 
 
 
-        for mode in [0]:
+        for mode in ['row','max','mean','sum']:
             all_logits = {}
             all_rephrases = {}
             right = {'s0': [], 's1': [], 'r0': [], 'r1': [], 'e0': [], 'e1': []}
@@ -254,10 +254,10 @@ if __name__ == "__main__":
 
                     for n, p in model.model.named_parameters():
                         p.data += params_dict.get(n, 0)
-                # if precesson != 4:
-                #     precesson+=1
-                #     param_stack.append(params_dict)
-                #     continue
+                if precesson != 4:
+                    precesson+=1
+                    param_stack.append(params_dict)
+                    continue
                 # print()
                 if mode=='max':
                 #max
@@ -384,15 +384,8 @@ if __name__ == "__main__":
         # with open(filename, "wb") as f:
         #     pickle.dump(all_rephrases, f)
 
-#sequence:[12:42<00:00,  1.31it/s, equiv=0.998, retain=0.372, succ=0.625]
 
-#originel  equiv=0.854, retain=0.983, succ=1]
-#max  [02:56<00:00,  5.66it/s, equiv=0.9, retain=0.673, succ=0.98]
-#mean  equiv=0.831, retain=0.819, succ=0.95]
-#sum equiv=0.892, retain=0.518, succ=0.82]
-
-
-#version2
+#result
 '''
 single: 1000/1000 [11:39<00:00,  1.43it/s, equiv=0.854, retain=0.983, succ=1]
 row: 1000/1000 [03:09<00:00,  5.28it/s, equiv=1, retain=0.371, succ=0.545]

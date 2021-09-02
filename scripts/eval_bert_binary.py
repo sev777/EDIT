@@ -29,7 +29,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "method",
         type=str,
-        choices=["baseline", "hyper"],
+        choices=["baseline", "hyper","multi"],
     )
     parser.add_argument(
         "--layer",
@@ -229,6 +229,146 @@ if __name__ == "__main__":
 
         model.val_dataloader(shuffle=False)
 
+        all_logits = {}
+        all_rephrases = {}
+        right = {'s0': [], 's1': [], 'r0': [], 'r1': [], 'e0': [], 'e1': []}
+        iter_ = tqdm(val_dataset0, ncols=200)
+        for j, d0 in iter_:
+
+            with torch.no_grad():
+                logits_orig, params_dict = model.get_logits_orig_params_dict(
+                    {
+                        k: v.to(model.device)
+                        for k, v in model.val_dataset.get_batch([], d0["cond"]).items()
+                    }
+                )
+            _, logits, params_dict = model.sample(
+                d0["view"],
+                d0["cond"],
+                logits_orig,
+                params_dict,
+                stop_condition=lambda condition, logits, n_iter: (
+                                                                         ("REFUTES >> SUPPORTS" in condition and logits[
+                                                                             -1] < 0)
+                                                                         or ("SUPPORTS >> REFUTES" in condition and
+                                                                             logits[-1] > 0)
+                                                                 )
+                                                                 and n_iter < 5,
+            )
+
+            all_rephrases[j] = logits.cpu()
+            all_logits_batch = []
+            for i, d1 in enumerate(batch_it(val_dataset1, args.batch_size)):
+                _, logits, _ = model.sample(
+                    [e["src"] for e in d1], d0["cond"], logits_orig, params_dict
+                )
+                all_logits_batch.append(logits.cpu())
+
+            all_logits[j] = torch.cat(all_logits_batch)
+
+            iter_.set_postfix(
+                succ=sum(
+                    val_dataset1[k]["alt"] == (v[k] > 0).item()
+                    for k, v in all_logits.items()
+                )
+                     / len(all_logits),
+                retain=sum(
+                    (
+                            ((v[:k] > 0) == preds[:k]).sum()
+                            + ((v[k + 1:] > 0) == preds[k + 1:]).sum()
+                    )
+                    / (len(v) - 1)
+                    for k, v in all_logits.items()
+                ).item()
+                       / len(all_logits),
+                equiv=sum(
+                    (v.sign() == all_logits[k][k].sign()).float().mean().item()
+                    for k, v in all_rephrases.items()
+                )
+                      / len(all_rephrases),
+            )
+        #
+        for (k, v),v1 in zip(all_logits.items(),val_dataset1):
+
+
+                res_label = []
+                x1 = []
+                ori_x1 = []
+                wrong_preds = []
+                for i, (vv, pp) in enumerate(zip(v[:k + 1], preds[:k + 1])):
+
+                    if not (vv > 0) == pp and (vv > 1 or vv < -1):
+                        x1.append(i)
+                        wrong_preds.append(vv.tolist())
+                    if not (vv > 0) == pp:
+                        ori_x1.append(i)
+
+                        res_label.append(0)
+                    else:
+                        res_label.append(1)
+                x2 = []
+                ori_x2 = []
+                for i, (vv, pp) in enumerate(zip(v[k + 1:], preds[k + 1:])):
+
+                    if not (vv > 0) == pp and (vv > 1 or vv < -1):
+                        x2.append(i)
+                        wrong_preds.append(vv.tolist())
+                    if not (vv > 0) == pp:
+                        ori_x2.append(i)
+
+                        res_label.append(0)
+                    else:
+                        res_label.append(1)
+
+                right['r0'].append(json.dumps({k:x1+x2}))#uncontain [-1,1]
+                # right['r1'].append(json.dumps({k:ori_x1+ori_x2}))#contain [-1,1]
+                right['e0'].append(json.dumps({k: wrong_preds}))  # after
+                # right['s0'].append(json.dumps({val_dataset1[k]['src']: [val_dataset1[i]['src'] for i in x1+x2]}))  # uncontain
+                # right['s1'].append(json.dumps({val_dataset1[k]['src']: [val_dataset1[i]['src'] for i in ori_x1+ori_x2]}))  # contain
+        #
+        filename = os.path.join(
+            args.output_path, f"all_logits-{args.from_idx}-{args.to_idx}.pkl"
+        )
+        with open('../res/retain002.txt', "w", encoding='utf-8') as f:
+           f.write(json.dumps(right, ensure_ascii=False))
+        logging.info("Saving {}".format(filename))
+        with open(filename, "wb") as f:
+            pickle.dump(all_logits, f)
+
+        filename = os.path.join(
+            args.output_path, f"all_rephrases-{args.from_idx}-{args.to_idx}.pkl"
+        )
+        logging.info("Saving {}".format(filename))
+        with open(filename, "wb") as f:
+            pickle.dump(all_rephrases, f)
+
+    elif args.method == "multi":
+        model = BertBinaryAugmented.load_from_checkpoint(args.model)
+        model.model = BertBinary.load_from_checkpoint(
+            model.hparams.model_checkpoint
+        ).model
+        model = model.eval().to(args.device)
+
+        val_dataset0 = BinaryAugmentedKILT(
+            tokenizer=model.tokenizer,
+            data_path='/home/yzc/hxq/edit2/datasets/fever-dev-kilt.jsonl',#model.hparams.dev_data_path,
+            max_length=model.hparams.max_length,
+            return_view=True,
+            all_views=True,
+        )
+        val_dataset0 = list(shuffle_it(list(enumerate(val_dataset0))))[
+            args.from_idx : args.to_idx
+        ]
+
+        val_dataset1 = BinaryAugmentedKILT(
+            tokenizer=model.tokenizer,
+            data_path='/home/yzc/hxq/edit2/datasets/fever-dev-kilt.jsonl',#model.hparams.dev_data_path,
+            max_length=model.hparams.max_length,
+        )
+        preds = torch.tensor([e["pred"] for e in val_dataset1])
+
+        model.val_dataloader(shuffle=False)
+
 
 
 
@@ -368,21 +508,21 @@ if __name__ == "__main__":
         #         right['s0'].append(json.dumps({val_dataset1[k]['src']: [val_dataset1[i]['src'] for i in x1+x2]}))  # uncontain
         #         right['s1'].append(json.dumps({val_dataset1[k]['src']: [val_dataset1[i]['src'] for i in ori_x1+ori_x2]}))  # contain
         #
-        # filename = os.path.join(
-        #     args.output_path, f"all_logits-{args.from_idx}-{args.to_idx}.pkl"
-        # )
+        filename = os.path.join(
+            args.output_path, f"all_logits-{args.from_idx}-{args.to_idx}.pkl"
+        )
         # with open('../res/retain002.txt', "w", encoding='utf-8') as f:
         #    f.write(json.dumps(right, ensure_ascii=False))
-        # logging.info("Saving {}".format(filename))
-        # with open(filename, "wb") as f:
-        #     pickle.dump(all_logits, f)
-        #
-        # filename = os.path.join(
-        #     args.output_path, f"all_rephrases-{args.from_idx}-{args.to_idx}.pkl"
-        # )
-        # logging.info("Saving {}".format(filename))
-        # with open(filename, "wb") as f:
-        #     pickle.dump(all_rephrases, f)
+        logging.info("Saving {}".format(filename))
+        with open(filename, "wb") as f:
+            pickle.dump(all_logits, f)
+
+        filename = os.path.join(
+            args.output_path, f"all_rephrases-{args.from_idx}-{args.to_idx}.pkl"
+        )
+        logging.info("Saving {}".format(filename))
+        with open(filename, "wb") as f:
+            pickle.dump(all_rephrases, f)
 
 
 #result

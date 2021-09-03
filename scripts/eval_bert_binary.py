@@ -394,11 +394,12 @@ if __name__ == "__main__":
 
                     for n, p in model.model.named_parameters():
                         p.data += params_dict.get(n, 0)
-                if precesson != 4:
-                    precesson+=1
-                    param_stack.append(params_dict)
-                    data_stack.append([j,d0])
-                    continue
+                else:
+                    if precesson != 4:
+                        precesson+=1
+                        param_stack.append(params_dict)
+                        data_stack.append([j,d0])
+                        continue
                 # print()
                 if mode=='max':
                 #max
